@@ -1,26 +1,27 @@
 #!/bin/bash
+set -euo pipefail
 
-# List of sample URLs separated by semicolon
-URLS="https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_8-FANG_RNA_6/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_9-FG7_RNA/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_10-GGAFUN_DELTA_1_RNA/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_11-GGAFUN_DELTA_2_RNA/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_12-GGAFUN_DELTA_3_RNA/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_13-GGAFUN_UNX1_RNA/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_14-GGAFUN_UNX2_RNA/;https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed/Sample_15-GGAFUN_UNX3_RNA/"
+BASE_URL="https://cgr.liv.ac.uk/illum/LIMS18211_0f587c04e76299c6/Trimmed"
+OUTDIR="data/raw_fastq"
+mkdir -p "$OUTDIR"
 
-# Create download directory if it doesn't exist
-DOWNLOAD_DIR="downloads"
-mkdir -p "$DOWNLOAD_DIR"
+echo "🔍 Crawling site for paired-end FASTQ files from: $BASE_URL"
 
-# Split URLs by semicolon and loop through each
-IFS=';' read -ra ADDR <<< "$URLS"
-for url in "${ADDR[@]}"; do
-    echo "Processing $url"
-    
-    # Fetch the listing page HTML for this sample folder
-    files=$(curl -s "$url" | grep -oP 'href="[^"]+\.fastq\.gz"' | sed 's/href="//;s/"$//')
-    
-    # Download each fastq.gz file found
-    for file in $files; do
-        file_url="${url}${file}"
-        echo "Downloading $file_url"
-        wget -c -P "$DOWNLOAD_DIR" "$file_url"
-    done
-done
+# Step 1: Crawl the server without downloading
+wget --spider -r -np -nd "$BASE_URL" 2>&1 | \
+grep '^--' | awk '{print $3}' > all_urls.txt
 
-echo "All downloads completed."
+# Step 2: Keep only paired-end FASTQs (_R1_ or _R2_)
+grep -E '_R[12]_.*\.fastq\.gz$' all_urls.txt > paired_fastq_urls.txt
+
+# Step 3: Exclude CHAD samples
+grep -Ev 'CHAD' paired_fastq_urls.txt > wanted_fastq_urls.txt
+
+echo "✅ Found $(wc -l < paired_fastq_urls.txt) total paired FASTQs"
+echo "✅ Keeping $(wc -l < wanted_fastq_urls.txt) non-CHAD FASTQs"
+
+# Step 4: Download them
+echo "⬇️  Downloading selected FASTQ files to $OUTDIR ..."
+wget -c -P "$OUTDIR" -i wanted_fastq_urls.txt
+
+echo "🎉 Done! Paired-end FASTQs are in $OUTDIR/"
