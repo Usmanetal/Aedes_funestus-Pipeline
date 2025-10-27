@@ -1,0 +1,295 @@
+---
+title: 'Anopheles funestus: Preliminary'
+author: "Ibrahim's Lab_Usman"
+date: "2025-10-16"
+output:
+  pdf_document: default
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DESeq2)
+library(openxlsx)
+library(tidyverse)
+library(ggplot2)
+library(pheatmap)
+library(matrixStats)
+library(biomaRt)
+library(dplyr)
+library(EnhancedVolcano)
+library(ggpubr)
+library(rtracklayer)
+```
+
+
+
+```{r }
+setwd("Aedes_funestus-Pipeline/resources")
+
+
+# Load metadata
+coldata <- read.csv("sample_metadata.csv", stringsAsFactors = FALSE)
+
+# Read featureCounts output
+raw_counts <- read.delim("featurecounts/gene_counts.txt", comment.char = "#", stringsAsFactors = FALSE)
+
+# Keep only Geneid and count columns (adjust index 7 if needed)
+counts <- raw_counts[, c(1, 7:ncol(raw_counts))]
+
+# Set Geneid as rownames and remove Geneid column
+rownames(counts) <- counts$Geneid
+counts <- counts[, -1]
+
+# Clean column names to match metadata
+clean_names <- colnames(counts)
+
+# Remove prefix and suffix
+clean_names <- gsub("^results\\.hisat2_alignments\\.", "", clean_names)  # remove prefix
+clean_names <- gsub("\\.sorted\\.bam$", "", clean_names)                 # remove suffix
+clean_names <- gsub("\\.", "-", clean_names)                              # replace dots with dashes
+
+# Reorder counts columns to match coldata$sample
+# This ensures that counts columns and metadata rows align
+counts <- counts[, match(coldata$sample, clean_names)]
+colnames(counts) <- coldata$description  # replace column names with descriptions
+
+# Optional: inspect first few rows
+head(counts)
+```
+
+## Deffrential Expression
+
+
+```{r}
+coldata <- read.csv("sample_metadata.csv", stringsAsFactors = FALSE)
+rownames(coldata) <- coldata$sample
+counts_clean <- counts[complete.cases(counts), ]
+colnames(counts_clean) <- coldata$sample
+
+rownames(coldata) <- coldata$sample
+
+counts_clean <- counts_clean[, rownames(coldata)]
+coldata$description <- relevel(factor(coldata$description), ref = "susceptible")
+
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = round(counts_clean),
+                              colData = coldata,
+                              design = ~ description)
+dds <- DESeq(dds)
+resultsNames(dds)
+
+
+# ------------------------
+# Shrinked log2 fold changes for each comparison
+# ------------------------
+
+# Control vs Susceptible
+res <- lfcShrink(dds, 
+                  coef = "description_control_vs_susceptible", 
+                  type = "apeglm")
+head(res)
+
+# Resistant vs Susceptible
+res1 <- lfcShrink(dds, 
+                  coef = "description_Resistant_vs_susceptible", 
+                  type = "apeglm")
+head(res1)
+
+```
+## Resistant vs Control
+
+```{r}
+# Control vs Susceptible
+res <- lfcShrink(dds, 
+                  coef = "description_control_vs_susceptible", 
+                  type = "apeglm")
+head(res)
+
+# Resistant vs Susceptible
+res1 <- lfcShrink(dds, 
+                  coef = "description_Resistant_vs_susceptible", 
+                  type = "apeglm")
+head(res1)
+coldata <- read.csv("sample_metadata.csv", stringsAsFactors = FALSE)
+rownames(coldata) <- coldata$sample
+counts_clean <- counts[complete.cases(counts), ]
+colnames(counts_clean) <- coldata$sample
+
+rownames(coldata) <- coldata$sample
+
+counts_clean <- counts_clean[, rownames(coldata)]
+coldata$description <- relevel(factor(coldata$description), ref = "Resistant")
+# ------------------------
+# Create DESeq2 object and run analysis
+# ------------------------
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_clean,
+  colData = coldata,
+  design = ~ description
+)
+
+
+dds <- DESeq(dds)
+resultsNames(dds)
+
+res2 <- lfcShrink(dds, coef = "description_control_vs_Resistant", type = "apeglm")
+ head(res2)
+
+
+
+```
+
+
+
+
+```{r}
+head(res)
+gtf_file <- "Anopheles_funestus.AfunF3.augustus.gtf"   
+
+gtf <- import(gtf_file)
+gtf_df <- as.data.frame(gtf)
+gene_map <- gtf_df[gtf_df$type == "gene", c("gene_id", "gene_name")]
+gene_map <- unique(gene_map)  
+
+head(gene_map)
+
+res_df <- as.data.frame(res) %>%
+  mutate(gene_id = rownames(res))
+
+res_annotated <- res_df %>%
+  left_join(gene_map, by = "gene_id") %>%
+  dplyr::select(gene_name, everything())   # gene_name first column
+
+head(res_annotated)
+
+```
+
+```{r}
+res_df <- as.data.frame(res1) %>%
+  mutate(gene_id = rownames(res1))
+
+res_annotated1 <- res_df %>%
+  left_join(gene_map, by = "gene_id") %>%
+  dplyr::select(gene_name, everything()) 
+head(res_annotated1)
+
+res_df <- as.data.frame(res2) %>%
+  mutate(gene_id = rownames(res2))
+
+res_annotated2 <- res_df %>%
+  left_join(gene_map, by = "gene_id") %>%
+  dplyr::select(gene_name, everything()) 
+head(res_annotated2)
+
+```
+
+
+```{r}
+
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Add worksheets with desired names
+addWorksheet(wb, "control_vs_susceptible")
+addWorksheet(wb, "Resistant_vs_susceptible")
+addWorksheet(wb, "control_vs_Resistant")
+
+# Write data to each sheet
+writeData(wb, sheet = "control_vs_susceptible", res_annotated)
+writeData(wb, sheet = "Resistant_vs_susceptible", res_annotated1)
+writeData(wb, sheet = "control_vs_Resistant", res_annotated2)
+
+# Save workbook
+saveWorkbook(wb, "lfcShrink_results.xlsx", overwrite = TRUE)
+
+```
+
+
+
+```{r}
+v1 <- EnhancedVolcano(res_annotated,
+    lab = res_annotated$gene_name,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'Control vs Susceptible',
+    pCutoff = 0.05,
+    FCcutoff = 1.0,
+    pointSize = 2.0,
+    labSize = 3.0,
+    colAlpha = 1,
+    legendLabels = c('NS','Log2FC','padj','padj & Log2FC'),
+    legendPosition = 'right'
+)
+
+v2 <- EnhancedVolcano(res_annotated1,
+    lab = res_annotated1$gene_name,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'Resistant vs Susceptible',
+    pCutoff = 0.05,
+    FCcutoff = 1.0,
+    pointSize = 2.0,
+    labSize = 3.0,
+    colAlpha = 1,
+    legendLabels = c('NS','Log2FC','padj','padj & Log2FC'),
+    legendPosition = 'right'
+)
+
+library(EnhancedVolcano)
+
+v3 <- EnhancedVolcano(
+    res_annotated2,
+    lab = res_annotated2$gene_name,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'Control vs Resistant',
+    pCutoff = 0.05,
+    FCcutoff = 1.0,
+    pointSize = 2.0,
+    labSize = 3.0,
+    colAlpha = 1,
+    legendLabels = c('NS','Log2FC','padj','padj & Log2FC'),
+    legendPosition = 'right'
+)
+
+# Combine all three volcano plots in one layout
+combined_volcano <- ggarrange(
+  v1, v2, v3,
+  ncol = 3, nrow = 1,
+  common.legend = TRUE,
+  legend = "right"
+)
+
+# Display combined figure
+combined_volcano
+
+# Optionally save the figure
+ggsave("combined_volcano_plots.png", combined_volcano, width = 18, height = 6, dpi = 300)
+
+```
+```{r}
+
+png("Volcano_Control_vs_Susceptible.png", width = 2000, height = 1800, res = 300)
+EnhancedVolcano(res_annotated,
+    lab = res_annotated$gene_name,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'Control vs Susceptible',
+    pCutoff = 0.05,
+    FCcutoff = 1.0,
+    pointSize = 2.0,
+    labSize = 3.0,
+    colAlpha = 1,
+    legendLabels = c('NS','Log2FC','padj','padj & Log2FC'),
+    legendPosition = 'right',
+    ylim = c(0, 63)
+)
+dev.off()
+```
+
+
+
+
